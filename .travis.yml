@@ -3,3 +3,4 @@ sudo: false
 
 script:
   - python scripts/print_travis.py
+  - scripts/show_git_status.sh
