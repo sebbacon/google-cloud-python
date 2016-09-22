@@ -45,16 +45,18 @@ class Config(object):
     global state.
     """
     CLIENT = None
+    IN_EMULATOR = False
 
 
 def setUpModule():
-    if os.getenv(PUBSUB_EMULATOR) is None:
-        Config.CLIENT = client.Client()
-    else:
+    Config.IN_EMULATOR = os.getenv(PUBSUB_EMULATOR) is not None
+    if Config.IN_EMULATOR:
         credentials = EmulatorCreds()
         http = httplib2.Http()  # Un-authorized.
         Config.CLIENT = client.Client(credentials=credentials,
                                       http=http)
+    else:
+        Config.CLIENT = client.Client()
 
 
 class TestPubsub(unittest.TestCase):
@@ -112,7 +114,7 @@ class TestPubsub(unittest.TestCase):
         self.to_delete.append(subscription)
         self.assertTrue(subscription.exists())
         self.assertEqual(subscription.name, SUBSCRIPTION_NAME)
-        self.assertTrue(subscription.topic is topic)
+        self.assertIs(subscription.topic, topic)
 
     def test_create_subscription_w_ack_deadline(self):
         TOPIC_NAME = 'create-sub-ack' + unique_resource_id('-')
@@ -128,7 +130,7 @@ class TestPubsub(unittest.TestCase):
         self.assertTrue(subscription.exists())
         self.assertEqual(subscription.name, SUBSCRIPTION_NAME)
         self.assertEqual(subscription.ack_deadline, 120)
-        self.assertTrue(subscription.topic is topic)
+        self.assertIs(subscription.topic, topic)
 
     def test_list_subscriptions(self):
         TOPIC_NAME = 'list-sub' + unique_resource_id('-')
@@ -203,11 +205,10 @@ class TestPubsub(unittest.TestCase):
         self.assertEqual(message2.attributes['extra'], EXTRA_2)
 
     def _maybe_emulator_skip(self):
-        # NOTE: We check at run-time rather than using the @unittest.skipIf
-        #       decorator. This matches the philosophy behind using
-        #       setUpModule to determine the environment at run-time
-        #       rather than at import time.
-        if os.getenv(PUBSUB_EMULATOR) is not None:
+        # NOTE: This method is necessary because ``Config.IN_EMULATOR``
+        #       is set at runtime rather than import time, which means we
+        #       can't use the @unittest.skipIf decorator.
+        if Config.IN_EMULATOR:
             self.skipTest('IAM not supported by Pub/Sub emulator')
 
     def test_topic_iam_policy(self):
@@ -220,8 +221,6 @@ class TestPubsub(unittest.TestCase):
         # Retry / backoff up to 7 seconds (1 + 2 + 4)
         retry = RetryResult(lambda result: result, max_tries=4)
         retry(topic.exists)()
-
-        self.assertTrue(topic.exists())
         self.to_delete.append(topic)
 
         if topic.check_iam_permissions([PUBSUB_TOPICS_GET_IAM_POLICY]):
@@ -240,9 +239,8 @@ class TestPubsub(unittest.TestCase):
         # Retry / backoff up to 7 seconds (1 + 2 + 4)
         retry = RetryResult(lambda result: result, max_tries=4)
         retry(topic.exists)()
-
-        self.assertTrue(topic.exists())
         self.to_delete.append(topic)
+
         SUB_NAME = 'test-sub-iam-policy-sub' + unique_resource_id('-')
         subscription = topic.subscription(SUB_NAME)
         subscription.create()
@@ -250,8 +248,6 @@ class TestPubsub(unittest.TestCase):
         # Retry / backoff up to 7 seconds (1 + 2 + 4)
         retry = RetryResult(lambda result: result, max_tries=4)
         retry(subscription.exists)()
-
-        self.assertTrue(subscription.exists())
         self.to_delete.insert(0, subscription)
 
         if subscription.check_iam_permissions(

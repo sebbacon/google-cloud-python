@@ -113,8 +113,8 @@ class TestBigQuery(unittest.TestCase):
         self.to_delete.append(dataset)
 
         self.assertTrue(dataset.exists())
-        self.assertEqual(dataset.friendly_name, None)
-        self.assertEqual(dataset.description, None)
+        self.assertIsNone(dataset.friendly_name)
+        self.assertIsNone(dataset.description)
         dataset.patch(friendly_name='Friendly', description='Description')
         self.assertEqual(dataset.friendly_name, 'Friendly')
         self.assertEqual(dataset.description, 'Description')
@@ -152,7 +152,7 @@ class TestBigQuery(unittest.TestCase):
 
         # Retrieve the datasets.
         all_datasets, token = Config.CLIENT.list_datasets()
-        self.assertTrue(token is None)
+        self.assertIsNone(token)
         created = [dataset for dataset in all_datasets
                    if dataset.name in datasets_to_create and
                    dataset.project == Config.CLIENT.project]
@@ -187,7 +187,7 @@ class TestBigQuery(unittest.TestCase):
         # Retrieve tables before any are created for the dataset.
         all_tables, token = dataset.list_tables()
         self.assertEqual(all_tables, [])
-        self.assertEqual(token, None)
+        self.assertIsNone(token)
 
         # Insert some tables to be listed.
         tables_to_create = [
@@ -205,7 +205,7 @@ class TestBigQuery(unittest.TestCase):
 
         # Retrieve the tables.
         all_tables, token = dataset.list_tables()
-        self.assertTrue(token is None)
+        self.assertIsNone(token)
         created = [table for table in all_tables
                    if (table.name in tables_to_create and
                        table.dataset_name == DATASET_NAME)]
@@ -227,8 +227,8 @@ class TestBigQuery(unittest.TestCase):
         table.create()
         self.to_delete.insert(0, table)
         self.assertTrue(table.exists())
-        self.assertEqual(table.friendly_name, None)
-        self.assertEqual(table.description, None)
+        self.assertIsNone(table.friendly_name)
+        self.assertIsNone(table.description)
         table.patch(friendly_name='Friendly', description='Description')
         self.assertEqual(table.friendly_name, 'Friendly')
         self.assertEqual(table.description, 'Description')
@@ -356,7 +356,6 @@ class TestBigQuery(unittest.TestCase):
         retry = RetryInstanceState(_job_done, max_tries=8)
         retry(job.reload)()
 
-        self.assertTrue(_job_done(job))
         self.assertEqual(job.output_rows, len(ROWS))
 
         rows, _, _ = table.fetch_data()
@@ -429,9 +428,41 @@ class TestBigQuery(unittest.TestCase):
         retry = RetryInstanceState(_job_done, max_tries=8)
         retry(job.reload)()
 
-        self.assertTrue(job.state in ('DONE', 'done'))
-
         rows, _, _ = table.fetch_data()
         by_age = operator.itemgetter(1)
         self.assertEqual(sorted(rows, key=by_age),
                          sorted(ROWS, key=by_age))
+
+    def test_job_cancel(self):
+        DATASET_NAME = _make_dataset_name('job_cancel')
+        JOB_NAME = 'fetch_' + DATASET_NAME
+        TABLE_NAME = 'test_table'
+        QUERY = 'SELECT * FROM %s.%s' % (DATASET_NAME, TABLE_NAME)
+
+        dataset = Config.CLIENT.dataset(DATASET_NAME)
+
+        retry_403(dataset.create)()
+        self.to_delete.append(dataset)
+
+        full_name = bigquery.SchemaField('full_name', 'STRING',
+                                         mode='REQUIRED')
+        age = bigquery.SchemaField('age', 'INTEGER', mode='REQUIRED')
+        table = dataset.table(TABLE_NAME, schema=[full_name, age])
+        table.create()
+        self.to_delete.insert(0, table)
+
+        job = Config.CLIENT.run_async_query(JOB_NAME, QUERY)
+        job.begin()
+        job.cancel()
+
+        def _job_done(instance):
+            return instance.state in ('DONE', 'done')
+
+        retry = RetryInstanceState(_job_done, max_tries=8)
+        retry(job.reload)()
+
+        # The `cancel` API doesn't leave any reliable traces on
+        # the status of the job resource, so we can't really assert for
+        # them here.  The best we can do is not that the API call didn't
+        # raise an error, and that the job completed (in the `retry()`
+        # above).
